@@ -8,9 +8,10 @@ from airflow.providers.google.cloud.transfers.local_to_gcs import LocalFilesyste
 
 from pendulum import datetime
 import pandas as pd
+import os.path
 
 
-bucket_name = "nyc-yellow-taxi-data"
+bucket_name = "nyc-yellow-taxi-data-airflow"
 file_name = "yellow_tripdata_2024-01.csv"
 
 
@@ -24,10 +25,10 @@ file_name = "yellow_tripdata_2024-01.csv"
     tags=['cloud_ingestion'],
 )
 def cloud_ingestion():
-    
+
     download_data = BashOperator(
         task_id='download_data',
-        bash_command="curl -o ./data https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet"
+        bash_command="$AIRFLOW_HOME/include/download_data_script.sh ",
     )
 
     @task(task_id="parquet_to_csv")
@@ -35,16 +36,17 @@ def cloud_ingestion():
         """
         This task converts the downloaded data format form .parquet to .csv
         """
-        downloaded_data = "./data/yellow_tripdata_2024-01.parquet"
-        df = pd.read_csv(downloaded_data)
-        df.to_csv("./data" + downloaded_data.split("/")[-1].replace(".parquet", ".csv"), index=False)
+        downloaded_data = "/usr/local/airflow/include/data/yellow_tripdata_2024-01.parquet"
+        df = pd.read_parquet(downloaded_data)
+        df.to_csv("/usr/local/airflow/include/data/"
+                  + downloaded_data.split("/")[-1].replace(".parquet", ".csv"), index=False)
 
     @task(task_id="transform_data")
     def transform_data():
         """
         This task cleans the downloaded data by changing the column data types to a proper format
         """
-        df = pd.read_csv("./data/yellow_tripdata_2024-01.csv")
+        df = pd.read_csv("/usr/local/airflow/include/data/yellow_tripdata_2024-01.csv")
         df.tpep_pickup_datetime = pd.to_datetime(df.tpep_pickup_datetime)
         df.tpep_dropoff_datetime = pd.to_datetime(df.tpep_dropoff_datetime)
 
@@ -52,7 +54,6 @@ def cloud_ingestion():
         task_id="create_s3_bucket",
         bucket_name=bucket_name,
         aws_conn_id="aws_default",
-        region_name="us-east-2",
     )
 
     create_gcp_bucket = GCSCreateBucketOperator(
@@ -66,7 +67,7 @@ def cloud_ingestion():
 
     upload_data_to_s3 = LocalFilesystemToS3Operator(
         task_id="upload_data_to_s3",
-        filename=f"./data/{file_name}",
+        filename=f"/usr/local/airflow/include/data/{file_name}",
         dest_key=file_name,
         dest_bucket=bucket_name,
         aws_conn_id="aws_default",
@@ -77,7 +78,7 @@ def cloud_ingestion():
 
     upload_data_to_gcp = LocalFilesystemToGCSOperator(
         task_id="upload_data_to_gcp",
-        src=f"./data/{file_name}",
+        src=f"/usr/local/airflow/include/data/{file_name}",
         dst=file_name,
         bucket=bucket_name,
         gcp_conn_id="google_cloud_default",
